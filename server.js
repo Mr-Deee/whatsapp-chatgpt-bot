@@ -1,72 +1,74 @@
 const express = require('express');
 const axios = require('axios');
-const fs = require('fs');
+const bodyParser = require('body-parser');
 const dotenv = require('dotenv');
 
 dotenv.config();
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-// Load the WhatsApp certificate
-const certPath = process.env.WHATSAPP_CERT_PATH;
-const cert = fs.readFileSync(certPath);
+// Webhook Verification Endpoint
+app.get('/webhook', (req, res) => {
+    const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "EAAZANftIfU2QBOZBoHrbOkx8Y766EeZASqYmS1nHqW5DHSIlIS5DNRUvpWRYHwkpbcfmYTDTWtaQ2tBhrR3MFosZCjKKvNzhNYWZCZBv3QA06SaV7xKfeEuT7GvYesQqbt3TW0K4aZCQSmgkgQyewusSZA5YxF8R7br9vA0HPts6VCijEoO33WtyjQqjZB0Bb9u1s6gZDZD";
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
 
-// WhatsApp Webhook Endpoint
-app.post('/webhook', async (req, res) => {
-    const body = req.body;
-
-    if (body && body.messages) {
-        const userMessage = body.messages[0].text.body;
-        const userPhone = body.messages[0].from;
-
-        try {
-            // Generate ChatGPT Response
-            const chatGPTResponse = await getChatGPTResponse(userMessage);
-
-            // Send Message to WhatsApp
-            await sendWhatsAppMessage(userPhone, chatGPTResponse);
-
-            return res.status(200).send('Message processed');
-        } catch (error) {
-            console.error('Error:', error);
-            return res.status(500).send('Internal Server Error');
-        }
+    if (mode && token && mode === 'subscribe' && token === verifyToken) {
+        res.status(200).send(challenge);
     } else {
-        res.status(400).send('No message found');
+        res.status(403).send('Forbidden');
     }
 });
 
-// Generate Response with ChatGPT
-async function getChatGPTResponse(message) {
+// Handle Incoming Messages
+app.post('/webhook', async (req, res) => {
+    const body = req.body;
+
+    if (body.entry && body.entry[0].changes[0].value.messages) {
+        const message = body.entry[0].changes[0].value.messages[0];
+        const from = message.from; // Sender's phone number
+        const text = message.text.body; // Message content
+
+        try {
+            // ChatGPT Response
+            const chatGPTResponse = await getChatGPTResponse(text);
+
+            // Send response back to WhatsApp
+            await sendWhatsAppMessage(from, chatGPTResponse);
+            res.status(200).send('Message processed');
+        } catch (err) {
+            console.error(err);
+            res.status(500).send('Error processing message');
+        }
+    } else {
+        res.status(404).send('No messages found');
+    }
+});
+
+// ChatGPT Integration
+async function getChatGPTResponse(userMessage) {
     const response = await axios.post('https://api.openai.com/v1/chat/completions', {
         model: "gpt-4",
-        messages: [{ role: "user", content: message }]
+        messages: [{ role: "user", content: userMessage }]
     }, {
-        headers: {
-            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-        }
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
     });
     return response.data.choices[0].message.content;
 }
 
-// Send WhatsApp Message
+// WhatsApp Message Sender
 async function sendWhatsAppMessage(to, message) {
-    const url = `${process.env.WHATSAPP_API_URL}/v15.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-    
+    const url = `https://graph.facebook.com/v15.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
     await axios.post(url, {
-        messaging_product: 'whatsapp',
+        messaging_product: "whatsapp",
         to,
         text: { body: message }
     }, {
-        headers: {
-            Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
-            'Content-Type': 'application/json',
-            'Certificate': cert
-        }
+        headers: { Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` }
     });
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
